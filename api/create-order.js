@@ -6,6 +6,15 @@ const razorpay = new Razorpay({
 });
 
 module.exports = async (req, res) => {
+  // Allow requests from any origin (needed for testing from local file)
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
+
   if (req.method !== 'POST') return res.status(405).end();
 
   const { amount, telegram_id } = req.body;
@@ -16,7 +25,7 @@ module.exports = async (req, res) => {
 
   try {
     const order = await razorpay.orders.create({
-      amount: amount * 100, // rupees -> paise
+      amount: amount * 100,
       currency: 'INR',
       payment_capture: 1,
       notes: { telegram_id: String(telegram_id) },
