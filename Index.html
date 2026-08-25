@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Complete Payment</title>
+<!-- Use cashfree.sandbox.js while testing with sandbox keys -->
+<script src="https://sdk.cashfree.com/js/v3/cashfree.js"></script>
+<style>
+  body{font-family:sans-serif;display:flex;height:100vh;align-items:center;justify-content:center;background:#111;color:#eee}
+  #msg{text-align:center}
+</style>
+</head>
+<body>
+<div id="msg">Loading payment...</div>
+<script>
+  const params = new URLSearchParams(window.location.search);
+  const sessionId = params.get("session_id");
+  const msg = document.getElementById("msg");
+
+  if (!sessionId) {
+    msg.textContent = "Missing session_id in URL.";
+  } else {
+    const cashfree = Cashfree({ mode: "production" }); // use "sandbox" for test keys
+    cashfree.checkout({
+      paymentSessionId: sessionId,
+      redirectTarget: "_self"
+    });
+  }
+</script>
+</body>
+</html>
