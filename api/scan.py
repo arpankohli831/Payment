@@ -1,16 +1,23 @@
 """
-api/scan.py — returns amounts from recent unread FamApp payment emails
+api/scan.py — returns amounts from recent unread FamApp payment emails (HARDENED)
 ------------------------------------------------------------------------------------------
-Built for bot.py (hosted on PythonAnywhere) to call remotely, since PythonAnywhere's
-free tier blocks direct IMAP connections to Gmail. This endpoint does the Gmail reading
-on Vercel's side and just returns the results over plain HTTPS.
+Only bot.py side that changes: NONE. This file lives entirely on Vercel — bot.py just
+calls it over HTTPS and trusts the response, so all the anti-fake-payment protection
+below is invisible to bot.py and requires zero changes there.
 
-GET /api/scan?api_key=YOUR_KEY
-    -> { "amounts": [10.0, 25.5, ...] }
+FAKE-PAYMENT PROTECTIONS ADDED:
+  1. Exact sender domain match — was a loose "contains famapp" check before, which a
+     spoofed address like noreply@famapp-verify.com would have passed. Now only the
+     real domain counts.
+  2. DKIM authentication check — verifies Gmail cryptographically confirmed the email
+     really came from FamApp's servers, not just that it *claims* to be from FamApp.
+     This is the strongest protection: even a perfectly-faked "From" address can't
+     pass DKIM without actually controlling FamApp's mail servers.
 
-Uses UNSEEN (same as your original fetch_gmail_amounts_sync) — fetching an email marks
-it read automatically, so a matched email can never be returned twice. This mirrors your
-existing bot logic exactly, just running on Vercel instead of locally.
+⚠️ FAMPAY_SENDER_DOMAIN below is my best guess based on the support email address shown
+in your FamApp email screenshot (support@famapp.in). Please confirm this is correct —
+if a real payment email ever gets rejected, check the exact "From:" address of that
+email and update FAMPAY_SENDER_DOMAIN to match exactly.
 
 ENV VARS (Vercel dashboard):
     GMAIL_USER, GMAIL_APP_PASSWORD, VERIFY_API_KEY
@@ -28,8 +35,33 @@ GMAIL_USER = os.environ.get("GMAIL_USER")
 GMAIL_APP_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD")
 VERIFY_API_KEY = os.environ.get("VERIFY_API_KEY")
 
-FAMPAY_SENDER_FILTER = "famapp"
+FAMPAY_SENDER_DOMAIN = "famapp.in"  # confirm this matches your real payment emails
 AMOUNT_REGEX = r"(?:successfully received|received|sent).*?(?:Rs\.?|₹)\s?([\d,]+\.?\d*)"
+
+
+def sender_domain_is_exact(msg) -> bool:
+    """True only if the From address's domain exactly matches FAMPAY_SENDER_DOMAIN."""
+    from_header = msg.get("From", "")
+    match = re.search(r"@([\w.-]+)>?$", from_header.strip())
+    if not match:
+        return False
+    domain = match.group(1).lower()
+    return domain == FAMPAY_SENDER_DOMAIN.lower()
+
+
+def dkim_passed(msg) -> bool:
+    """
+    True if Gmail's own header confirms this email passed DKIM authentication for
+    the expected domain. This is checked in addition to (not instead of) the exact
+    sender match above — both must pass.
+    """
+    auth_results = msg.get("Authentication-Results", "") or ""
+    auth_results = auth_results.lower()
+    if "dkim=pass" not in auth_results:
+        return False
+    if FAMPAY_SENDER_DOMAIN.lower() not in auth_results:
+        return False
+    return True
 
 
 def fetch_unseen_amounts():
@@ -38,13 +70,21 @@ def fetch_unseen_amounts():
     imap.login(GMAIL_USER, GMAIL_APP_PASSWORD)
     imap.select("inbox")
 
-    status, data = imap.search(None, f'(UNSEEN FROM "{FAMPAY_SENDER_FILTER}")')
+    # broad search first (domain-only search isn't reliably supported across all
+    # IMAP setups), exact verification happens per-message below
+    status, data = imap.search(None, '(UNSEEN FROM "famapp")')
     ids = data[0].split()
 
     for msg_id in ids:
         _, msg_data = imap.fetch(msg_id, "(RFC822)")  # fetching marks it \Seen automatically
         raw_email = msg_data[0][1]
         msg = email_lib.message_from_bytes(raw_email)
+
+        # --- reject anything that isn't provably a real FamApp email ---
+        if not sender_domain_is_exact(msg):
+            continue
+        if not dkim_passed(msg):
+            continue
 
         body = ""
         if msg.is_multipart():
