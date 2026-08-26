@@ -1,22 +1,16 @@
 """
-api/webhook.py — Telegram bot (webhook mode, connects to lib/gmail_check.py)
+api/webhook.py — Telegram bot (webhook mode)
 ------------------------------------------------------------------------------------------
-This IS your Telegram bot. Vercel can't run infinity_polling() (needs a forever-running
-process), so Telegram sends updates to this URL instead, and this file replies using
-plain HTTP calls to Telegram's API.
+When "I've Paid ✅" is tapped, check_gmail_for_amount() only looks at emails from the
+last 60 seconds (see lib/gmail_check.py) — old emails from past tests can never match.
 
-Flow:
-  /pay <amount>  -> generates UPI QR, sends it + an "I've Paid" button
-  button tapped  -> calls check_gmail_for_amount() from lib/gmail_check.py, replies
+Also deduplicates Telegram's retried webhook calls (in-memory, best-effort) so a slow
+response doesn't cause 2-3 duplicate "Payment verified!" messages.
 
-ENV VARS (set in Vercel dashboard -> Settings -> Environment Variables):
-    BOT_TOKEN
-    GMAIL_USER
-    GMAIL_APP_PASSWORD
-    UPI_ID
-    UPI_NAME
+ENV VARS (Vercel dashboard):
+    BOT_TOKEN, GMAIL_USER, GMAIL_APP_PASSWORD, UPI_ID, UPI_NAME
 
-ONE-TIME SETUP after deploying, run once (browser or curl):
+ONE-TIME SETUP after deploying:
     https://api.telegram.org/bot<BOT_TOKEN>/setWebhook?url=https://YOURAPP.vercel.app/api/webhook
 """
 
@@ -38,6 +32,11 @@ UPI_ID = os.environ.get("UPI_ID", "yourid@fam")
 UPI_NAME = os.environ.get("UPI_NAME", "YOUR NAME")
 
 TG_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
+
+# Best-effort in-memory dedupe. Vercel functions can be reused between invocations,
+# so this catches most duplicate retries within the same warm instance (not perfect
+# across cold starts, but eliminates the vast majority of duplicate replies).
+_processed_update_ids = set()
 
 
 def tg_send_message(chat_id, text):
@@ -65,6 +64,11 @@ def make_upi_qr(amount, order_id):
 
 
 def handle_update(update):
+    update_id = update.get("update_id")
+    if update_id in _processed_update_ids:
+        return  # already handled this exact update, Telegram just retried it
+    _processed_update_ids.add(update_id)
+
     if "message" in update:
         msg = update["message"]
         chat_id = msg["chat"]["id"]
@@ -94,7 +98,7 @@ def handle_update(update):
         tg_answer_callback(cq["id"], "Checking...")
 
         try:
-            paid = check_gmail_for_amount(amount)   # <-- this is the "connection" to the verification logic
+            paid = check_gmail_for_amount(amount)  # only checks last 60 seconds of mail
         except Exception as e:
             tg_send_message(chat_id, f"⚠️ Check failed: {e}")
             return
