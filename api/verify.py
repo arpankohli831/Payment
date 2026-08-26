@@ -1,12 +1,12 @@
 """
-api/verify.py — standalone verify endpoint (optional, for calling from elsewhere:
-a website, another bot, etc). Same underlying check as the Telegram bot uses.
+api/verify.py — standalone verify endpoint (optional, for calling from elsewhere)
 
 POST /api/verify   { "api_key": "...", "amount": 1 }  ->  { "verified": true/false }
 
+Only counts payment emails received in the last 60 seconds (see lib/gmail_check.py).
+
 ENV VARS:
-    GMAIL_USER, GMAIL_APP_PASSWORD  (used by lib/gmail_check.py)
-    VERIFY_API_KEY                  (your own secret, protects this endpoint)
+    GMAIL_USER, GMAIL_APP_PASSWORD, VERIFY_API_KEY
 """
 
 import os
