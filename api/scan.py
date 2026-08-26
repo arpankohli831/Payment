@@ -84,5 +84,6 @@ class handler(BaseHTTPRequestHandler):
     def _reply(self, status, obj):
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
+        self.send_header("Cache-Control", "no-store, no-cache, must-revalidate")
         self.end_headers()
         self.wfile.write(json.dumps(obj).encode())
