@@ -9,6 +9,9 @@ Features:
   - QR expires 5 minutes after creation — after that, tapping the button just shows
     "⌛ QR expired, send /pay again" without wasting a Gmail check (saves time + avoids
     checking against a long-stale order)
+  - 10-second cooldown per chat between Gmail checks — stops rapid button-tapping from
+    triggering many Gmail logins in a row, which protects the account from being flagged
+    as suspicious by Google
 
 check_gmail_for_amount() only looks at emails from the last 60 seconds at tap-time
 (see lib/gmail_check.py) — old emails from past tests/payments can never match.
@@ -43,11 +46,13 @@ UPI_NAME = os.environ.get("UPI_NAME", "YOUR NAME")
 TG_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
 QR_EXPIRY_SECONDS = 300  # 5 minutes
+COOLDOWN_SECONDS = 10    # minimum gap between Gmail checks per chat, protects your Gmail account
 
 # Best-effort in-memory dedupe. Vercel functions can be reused between invocations,
 # so this catches most duplicate retries within the same warm instance (not perfect
 # across cold starts, but eliminates the vast majority of duplicate replies).
 _processed_update_ids = set()
+_last_check_time = {}   # chat_id -> unix timestamp of last Gmail check
 
 
 def tg_send_message(chat_id, text):
@@ -141,6 +146,16 @@ def handle_update(update):
                 reply_markup={"inline_keyboard": []}  # remove the button
             )
             return
+
+        # --- cooldown check: stop rapid repeated taps from hammering Gmail ---
+        now = time.time()
+        last_check = _last_check_time.get(chat_id, 0)
+        elapsed = now - last_check
+        if elapsed < COOLDOWN_SECONDS:
+            wait_more = round(COOLDOWN_SECONDS - elapsed)
+            tg_answer_callback(cq["id"], f"Please wait {wait_more}s before checking again")
+            return
+        _last_check_time[chat_id] = now
 
         # --- quick "checking" animation ---
         tg_answer_callback(cq["id"], "Checking...")
